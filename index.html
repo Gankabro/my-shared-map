@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מפת מסלולים שיתופית</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; font-family: 'Inter', sans-serif; overflow: hidden; }
+        #map { height: 100%; width: 100%; cursor: default; background-color: #f0f0f0; }
+        #map.admin-mode { cursor: crosshair; }
+        #map.drawing-mode { cursor: crosshair; }
+        #map.eraser-mode { cursor: not-allowed; }
+        .panel { position: absolute; z-index: 1000; background: rgba(255,255,255,0.9); backdrop-filter: blur(5px); padding: 8px 12px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); transition: box-shadow 0.2s; }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; cursor: move; gap: 8px; }
+        .panel-content { margin-top: 8px; overflow: hidden; max-height: 500px; transition: all 0.3s ease-in-out; }
+        .panel.collapsed .panel-content { max-height: 0; margin-top: 0; opacity: 0; }
+        .panel.collapsed .toggle-icon { transform: rotate(180deg); }
+        .toggle-icon { cursor: pointer; }
+        #title-panel { top: 40px; left: 50%; transform: translateX(-50%); }
+        .legend-container { top: 150px; right: 10px; width: 180px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 8px; }
+        .legend-color-box { width: 20px; height: 20px; border-radius: 4px; margin-left: 10px; border: 1px solid rgba(0,0,0,0.2); flex-shrink: 0; }
+        .legend-text.editable { cursor: pointer; text-decoration: underline dashed; }
+        .admin-panel { bottom: 20px; left: 50%; transform: translateX(-50%); }
+        .drawing-tools-panel { bottom: 20px; right: 10px; }
+        @media (max-width: 768px) {
+            .drawing-tools-panel { bottom: 120px; right: 10px; }
+        }
+        .color-radio input { display: none; }
+        .color-radio label { display: block; width: 30px; height: 30px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; }
+        .color-radio input:checked + label { border-color: #3b82f6; }
+        .popup-coords a { color: #007bff; text-decoration: none; }
+        .custom-div-icon { margin: 0 !important; border: none !important; background: transparent !important; }
+        .numbered-icon-container { position: relative; width: 32px; height: 32px; }
+        .numbered-icon-svg { position: absolute; top: 0; left: 0; }
+        .numbered-icon-text { position: absolute; top: 5px; left: 0; width: 100%; text-align: center; font-size: 11px; font-weight: bold; color: white; text-shadow: 0 0 2px black; }
+        .radius-tooltip { background-color: rgba(255, 255, 255, 0.7); border: 1px solid #999; border-radius: 4px; padding: 2px 5px; font-size: 10px; white-space: nowrap; }
+        .resize-handle-icon div { width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5); cursor: ew-resize; }
+        #search-container { position: absolute; top: 10px; left: 10px; z-index: 1000; display: flex; gap: 4px; }
+        .leaflet-control-zoom { margin-top: 50px; }
+        .drawing-tool-btn { padding: 8px 12px; background: white; border: 2px solid #ccc; border-radius: 6px; cursor: pointer; transition: all 0.2s; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; font-size: 14px; }
+        .drawing-tool-btn:hover { background: #f0f0f0; border-color: #3b82f6; }
+        .drawing-tool-btn.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+        .drawing-tool-btn.eraser { background: #fef3c7; border-color: #f59e0b; }
+        .drawing-tool-btn.eraser.active { background: #f59e0b; color: white; border-color: #f59e0b; }
+        .drawing-tool-btn.cancel { background: #ef4444; color: white; border-color: #ef4444; }
+        .drawing-tool-btn svg { width: 20px; height: 20px; }
+        .eraser-highlight { stroke: #f59e0b !important; stroke-width: 4 !important; }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div id="toast" class="hidden fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg z-[1001]"></div>
+    <div id="title-panel" class="panel"> 
+        <div class="panel-header"> 
+            <h1 class="text-xl md:text-2xl font-bold text-gray-800">מפת מסלולים שיתופית</h1> 
+            <svg class="w-5 h-5 transition-transform toggle-icon" onclick="togglePanel('title-panel', event)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg> 
+        </div> 
+        <div class="panel-content text-center"><p id="instruction-text" class="text-sm text-gray-500 mt-1"></p></div> 
+    </div>
+    
+    <div id="legend" class="legend-container panel"> 
+        <div class="panel-header" onclick="togglePanel('legend', event)"> 
+            <h3 class="font-bold">מקרא מסלולים</h3> 
+            <svg class="w-5 h-5 transition-transform toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg> 
+        </div> 
+        <div class="panel-content"><div id="legend-items-container" class="mt-2"></div></div> 
+    </div>
+
+    <div id="user-count-panel" class="panel hidden" style="top: 150px; left: 10px;">
+        <div class="panel-header" onclick="togglePanel('user-count-panel', event)">
+            <h3 class="font-bold">משתמשים פעילים</h3>
+            <svg class="w-5 h-5 transition-transform toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </div>
+        <div class="panel-content text-lg font-bold text-center">
+            <span id="user-count">...</span>
+        </div>
+    </div>
+    
+    <div id="admin-color-panel" class="admin-panel panel hidden"> 
+        <div class="panel-header" onclick="togglePanel('admin-color-panel', event)"> 
+            <h3 class="font-semibold">בחר צבע</h3> 
+            <svg class="w-5 h-5 transition-transform toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg> 
+        </div> 
+        <div id="admin-panel-content" class="panel-content flex gap-3 pt-2 justify-center"></div> 
+    </div>
+    
+    <div id="drawing-tools-panel" class="drawing-tools-panel panel hidden">
+        <div class="panel-header" onclick="togglePanel('drawing-tools-panel', event)">
+            <h3 class="font-semibold">כלי ציור</h3>
+            <svg class="w-5 h-5 transition-transform toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </div>
+        <div class="panel-content">
+            <button class="drawing-tool-btn" onclick="activateDrawingTool('freehand')" id="tool-freehand">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                <span>ציור חופשי</span>
+            </button>
+            <button class="drawing-tool-btn" onclick="activateDrawingTool('polygon')" id="tool-polygon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 013.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+                <span>מצולע</span>
+            </button>
+            <button class="drawing-tool-btn" onclick="activateDrawingTool('rectangle')" id="tool-rectangle">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z"></path></svg>
+                <span>מלבן</span>
+            </button>
+            <button class="drawing-tool-btn" onclick="activateDrawingTool('circle')" id="tool-circle">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span>עיגול</span>
+            </button>
+            <button class="drawing-tool-btn eraser" onclick="activateEraserMode()" id="tool-eraser">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                <span>מחק</span>
+            </button>
+            <button class="drawing-tool-btn cancel" onclick="cancelDrawing()">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                <span>ביטול</span>
+            </button>
+        </div>
+    </div>
+    
+    <div id="search-container">
+        <input type="text" id="search-input" placeholder="חפש עיר..." class="px-2 py-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <button onclick="searchLocation()" class="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 shadow-sm">חפש</button>
+    </div>
+    
+    <div id="map"></div>
+
+    <script>
+        let map, adminPassword = null, sessionId;
+        const API_BASE_URL = '';
+        let drawnItems = L.layerGroup();
+        let drawingsLayer = L.layerGroup();
+        let tempDrawingFeedbackLayer = L.layerGroup();
+        
+        const ROUTE_COLORS = { red: '#d9534f', orange: '#f0ad4e', purple: '#5e43a6', brown: '#a1887f' };
+        
+        let userCountInterval = null;
+
+        let currentDrawingTool = null;
+        let eraserMode = false;
+        let isDrawing = false;
+        let drawingPoints = [];
+        let tempDrawingLayer = null;
+        let freehandLine = null;
+        let drawingLayersMap = new Map();
+
+        document.addEventListener('DOMContentLoaded', initMap);
+
+        function initMap() {
+            try {
+                sessionId = sessionStorage.getItem('mapSessionId');
+                if (!sessionId) {
+                    sessionId = crypto.randomUUID();
+                    sessionStorage.setItem('mapSessionId', sessionId);
+                }
+
+                map = L.map('map', { zoomControl: false }).setView([31.7683, 35.2177], 8); 
+                L.control.zoom({ position: 'topright' }).addTo(map);
+
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+                drawnItems.addTo(map);
+                drawingsLayer.addTo(map);
+                tempDrawingFeedbackLayer.addTo(map);
+
+                buildAdminPanel();
+                deactivateAdminUI();
+                ['title-panel', 'legend', 'admin-color-panel', 'drawing-tools-panel', 'user-count-panel'].forEach(id => makeDraggable(document.getElementById(id)));
+                if (window.innerWidth < 768) ['legend', 'admin-color-panel', 'title-panel', 'drawing-tools-panel', 'user-count-panel'].forEach(id => togglePanel(id, null, true));
+                map.on('click', handleMapClick);
+                document.getElementById('search-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') searchLocation(); });
+                
+                fetchAndDisplayData();
+                setInterval(fetchAndDisplayData, 5000);
+            } catch(e) { console.error("Initialization failed:", e); document.body.innerHTML = "<h1>אירעה שגיאה קריטית. אנא בצע רענון מאולץ (Ctrl+F5).</h1>"; }
+        }
+        
+        function togglePanel(panelId, event, forceCollapse = false) { 
+            event?.stopPropagation(); 
+            const panel = document.getElementById(panelId); 
+            if (!panel) return; 
+            if (forceCollapse) panel.classList.add('collapsed'); 
+            else panel.classList.toggle('collapsed'); 
+        }
+        
+        function makeDraggable(panel) { 
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0; 
+            const header = panel.querySelector(".panel-header"); 
+            function dragMouseDown(e) { 
+                e.preventDefault(); 
+                pos3 = e.clientX; 
+                pos4 = e.clientY; 
+                document.onmouseup = closeDragElement; 
+                document.onmousemove = elementDrag; 
+                panel.style.boxShadow = "0 8px 25px rgba(0,0,0,0.3)"; 
+            } 
+            function elementDrag(e) { 
+                e.preventDefault(); 
+                pos1 = pos3 - e.clientX; 
+                pos2 = pos4 - e.clientY; 
+                pos3 = e.clientX; 
+                pos4 = e.clientY; 
+                panel.style.top = (panel.offsetTop - pos2) + "px"; 
+                panel.style.left = (panel.offsetLeft - pos1) + "px"; 
+            } 
+            function closeDragElement() { 
+                document.onmouseup = null; 
+                document.onmousemove = null; 
+                panel.style.boxShadow = "0 2px 10px rgba(0,0,0,0.2)"; 
+            } 
+            if (header) header.onmousedown = dragMouseDown; 
+        }
+        
+        function handleMapClick(event) {
+            if (eraserMode) return;
+            if (currentDrawingTool) {
+                handleDrawingClick(event);
+                return;
+            }
+            if (!adminPassword) return;
+            const selectedColor = document.querySelector('input[name="route-color"]:checked')?.value; 
+            if (!selectedColor) { showToast('אנא בחר צבע מסלול.', 'error'); return; }
+            const pinText = prompt('הזן תיאור לנעץ (אופציונלי):'); 
+            if (pinText !== null) { 
+                const radiusInput = prompt('הזן רדיוס במטרים (אופציונלי):'); 
+                const radius = radiusInput ? parseInt(radiusInput) : 0; 
+                if (isNaN(radius)) { showToast('הרדיוס חייב להיות מספר.', 'error'); return; } 
+                addPinToServer(event.latlng, pinText, selectedColor, radius); 
+            }
+        }
+        
+        function activateEraserMode() {
+            if (!adminPassword) { showToast('נדרש מצב מנהל למחיקה.', 'error'); return; }
+            if (currentDrawingTool) cancelDrawing();
+            eraserMode = true;
+            document.querySelectorAll('.drawing-tool-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('tool-eraser').classList.add('active');
+            document.getElementById('map').classList.add('eraser-mode');
+            showToast('לחץ על ציור כדי למחוק אותו', 'info');
+        }
+        
+        function activateDrawingTool(tool) {
+            if (!adminPassword) { showToast('נדרש מצב מנהל לציור.', 'error'); return; }
+            
+            eraserMode = false;
+            document.getElementById('map').classList.remove('eraser-mode');
+            cancelDrawing();
+            currentDrawingTool = tool;
+            isDrawing = false;
+            drawingPoints = [];
+            
+            map.dragging.disable(); map.touchZoom.disable(); map.doubleClickZoom.disable(); map.scrollWheelZoom.disable(); map.boxZoom.disable(); map.keyboard.disable(); if (map.tap) map.tap.disable();
+            
+            const mapContainer = map.getContainer();
+            document.querySelectorAll('.drawing-tool-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`tool-${tool}`).classList.add('active');
+            document.getElementById('map').classList.add('drawing-mode');
+            
+            if (tool === 'freehand') {
+                showToast('לחץ והחזק כדי לצייר קו חופשי', 'info');
+                mapContainer.addEventListener('touchstart', startFreehandDrawingTouch, { passive: false });
+                map.on('mousedown', startFreehandDrawing);
+            } else if (tool === 'polygon') {
+                showToast('לחץ כדי להוסיף נקודות. לחיצה כפולה לסיום.', 'info');
+                map.on('dblclick', finishPolygonDrawing);
+                map.on('click', handleDrawingClick);
+            } else if (tool === 'rectangle') {
+                showToast('לחץ והחזק כדי לצייר מלבן', 'info');
+                mapContainer.addEventListener('touchstart', startRectangleDrawingTouch, { passive: false });
+                map.on('mousedown', startRectangleDrawing);
+            } else if (tool === 'circle') {
+                showToast('לחץ והחזק כדי לצייר עיגול', 'info');
+                mapContainer.addEventListener('touchstart', startCircleDrawingTouch, { passive: false });
+                map.on('mousedown', startCircleDrawing);
+            }
+        }
+        
+        function handleDrawingClick(event) {
+            if (currentDrawingTool === 'polygon') {
+                drawingPoints.push([event.latlng.lat, event.latlng.lng]);
+                L.circleMarker(event.latlng, { radius: 4, color: getSelectedColor(), fillOpacity: 1 }).addTo(tempDrawingFeedbackLayer);
+                if (drawingPoints.length > 1) {
+                    if (tempDrawingLayer) tempDrawingFeedbackLayer.removeLayer(tempDrawingLayer);
+                    tempDrawingLayer = L.polyline(drawingPoints, { color: getSelectedColor(), weight: 2, dashArray: '5, 5' }).addTo(tempDrawingFeedbackLayer);
+                }
+            }
+        }
+
+        function startFreehandDrawing(event) {
+            L.DomEvent.stopPropagation(event);
+            isDrawing = true;
+            const latlng = event.latlng;
+            drawingPoints = [[latlng.lat, latlng.lng]];
+            freehandLine = L.polyline(drawingPoints, { color: getSelectedColor(), weight: 3 }).addTo(tempDrawingFeedbackLayer);
+            map.on('mousemove', continueFreehandDrawing);
+            map.on('mouseup', finishFreehandDrawing);
+        }
+        function startFreehandDrawingTouch(event) {
+            event.preventDefault(); event.stopPropagation();
+            isDrawing = true;
+            const touch = event.touches[0];
+            const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(touch));
+            drawingPoints = [[latlng.lat, latlng.lng]];
+            freehandLine = L.polyline(drawingPoints, { color: getSelectedColor(), weight: 3 }).addTo(tempDrawingFeedbackLayer);
+            const mapContainer = map.getContainer();
+            mapContainer.addEventListener('touchmove', continueFreehandDrawingTouch, { passive: false });
+            mapContainer.addEventListener('touchend', finishFreehandDrawingTouch);
+        }
+        function continueFreehandDrawing(event) {
+            if (!isDrawing) return;
+            drawingPoints.push([event.latlng.lat, event.latlng.lng]);
+            freehandLine.setLatLngs(drawingPoints);
+        }
+        function continueFreehandDrawingTouch(event) {
+            if (!isDrawing) return;
+            event.preventDefault(); event.stopPropagation();
+            const touch = event.touches[0];
+            const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(touch));
+            drawingPoints.push([latlng.lat, latlng.lng]);
+            freehandLine.setLatLngs(drawingPoints);
+        }
+        function finishFreehandDrawing() {
+            if (!isDrawing) return;
+            isDrawing = false;
+            map.off('mousemove', continueFreehandDrawing);
+            map.off('mouseup', finishFreehandDrawing);
+            if (drawingPoints.length > 1) saveDrawing('freehand', drawingPoints);
+            cancelDrawing();
+        }
+        function finishFreehandDrawingTouch() {
+            if (!isDrawing) return;
+            isDrawing = false;
+            const mapContainer = map.getContainer();
+            mapContainer.removeEventListener('touchmove', continueFreehandDrawingTouch);
+            mapContainer.removeEventListener('touchend', finishFreehandDrawingTouch);
+            if (drawingPoints.length > 1) saveDrawing('freehand', drawingPoints);
+            cancelDrawing();
+        }
+
+        function startRectangleDrawing(event) {
+            L.DomEvent.stopPropagation(event);
+            isDrawing = true;
+            const startPoint = event.latlng;
+            drawingPoints = [startPoint];
+            tempDrawingLayer = L.rectangle([startPoint, startPoint], { color: getSelectedColor(), weight: 2, fillOpacity: 0.2 }).addTo(tempDrawingFeedbackLayer);
+            const updateRect = (e) => { if (!isDrawing) return; tempDrawingLayer.setBounds([startPoint, e.latlng]); };
+            const finishRect = (e) => {
+                if (!isDrawing) return; isDrawing = false;
+                map.off('mousemove', updateRect); map.off('mouseup', finishRect);
+                const bounds = [[startPoint.lat, startPoint.lng], [e.latlng.lat, e.latlng.lng]];
+                saveDrawing('rectangle', bounds);
+                cancelDrawing();
+            };
+            map.on('mousemove', updateRect); map.on('mouseup', finishRect);
+        }
+        function startRectangleDrawingTouch(event) {
+            event.preventDefault(); event.stopPropagation(); isDrawing = true;
+            const touch = event.touches[0];
+            const startPoint = map.containerPointToLatLng(map.mouseEventToContainerPoint(touch));
+            drawingPoints = [startPoint];
+            tempDrawingLayer = L.rectangle([startPoint, startPoint], { color: getSelectedColor(), weight: 2, fillOpacity: 0.2 }).addTo(tempDrawingFeedbackLayer);
+            const mapContainer = map.getContainer();
+            const updateRect = (e) => {
+                if (!isDrawing) return; e.preventDefault(); e.stopPropagation();
+                const currentTouch = e.touches[0];
+                const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(currentTouch));
+                tempDrawingLayer.setBounds([startPoint, latlng]);
+            };
+            const finishRect = (e) => {
+                if (!isDrawing) return; isDrawing = false;
+                mapContainer.removeEventListener('touchmove', updateRect); mapContainer.removeEventListener('touchend', finishRect);
+                const endTouch = e.changedTouches[0];
+                const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(endTouch));
+                const bounds = [[startPoint.lat, startPoint.lng], [latlng.lat, latlng.lng]];
+                saveDrawing('rectangle', bounds);
+                cancelDrawing();
+            };
+            mapContainer.addEventListener('touchmove', updateRect, { passive: false });
+            mapContainer.addEventListener('touchend', finishRect);
+        }
+
+        function startCircleDrawing(event) {
+            L.DomEvent.stopPropagation(event);
+            isDrawing = true;
+            const centerPoint = event.latlng;
+            drawingPoints = [centerPoint];
+            tempDrawingLayer = L.circle(centerPoint, { radius: 0, color: getSelectedColor(), weight: 2, fillOpacity: 0.2 }).addTo(tempDrawingFeedbackLayer);
+            const updateCircle = (e) => { if (!isDrawing) return; const radius = centerPoint.distanceTo(e.latlng); tempDrawingLayer.setRadius(radius); };
+            const finishCircle = (e) => {
+                if (!isDrawing) return; isDrawing = false;
+                map.off('mousemove', updateCircle); map.off('mouseup', finishCircle);
+                const radius = centerPoint.distanceTo(e.latlng);
+                saveDrawing('circle', { center: [centerPoint.lat, centerPoint.lng], radius: radius });
+                cancelDrawing();
+            };
+            map.on('mousemove', updateCircle); map.on('mouseup', finishCircle);
+        }
+        function startCircleDrawingTouch(event) {
+            event.preventDefault(); event.stopPropagation(); isDrawing = true;
+            const touch = event.touches[0];
+            const centerPoint = map.containerPointToLatLng(map.mouseEventToContainerPoint(touch));
+            drawingPoints = [centerPoint];
+            tempDrawingLayer = L.circle(centerPoint, { radius: 0, color: getSelectedColor(), weight: 2, fillOpacity: 0.2 }).addTo(tempDrawingFeedbackLayer);
+            const mapContainer = map.getContainer();
+            const updateCircle = (e) => {
+                if (!isDrawing) return; e.preventDefault(); e.stopPropagation();
+                const currentTouch = e.touches[0];
+                const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(currentTouch));
+                const radius = centerPoint.distanceTo(latlng);
+                tempDrawingLayer.setRadius(radius);
+            };
+            const finishCircle = (e) => {
+                if (!isDrawing) return; isDrawing = false;
+                mapContainer.removeEventListener('touchmove', updateCircle); mapContainer.removeEventListener('touchend', finishRect);
+                const endTouch = e.changedTouches[0];
+                const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(endTouch));
+                const radius = centerPoint.distanceTo(latlng);
+                saveDrawing('circle', { center: [centerPoint.lat, centerPoint.lng], radius: radius });
+                cancelDrawing();
+            };
+            mapContainer.addEventListener('touchmove', updateCircle, { passive: false });
+            mapContainer.addEventListener('touchend', finishCircle);
+        }
+        
+        function finishPolygonDrawing(event) {
+            L.DomEvent.stopPropagation(event);
+            if (drawingPoints.length < 3) { showToast('נדרשות לפחות 3 נקודות למצולע', 'error'); return; }
+            saveDrawing('polygon', drawingPoints);
+            cancelDrawing();
+        }
+        
+        function cancelDrawing() {
+            currentDrawingTool = null; isDrawing = false; drawingPoints = []; eraserMode = false;
+            map.dragging.enable(); map.touchZoom.enable(); map.doubleClickZoom.enable(); map.scrollWheelZoom.enable(); map.boxZoom.enable(); map.keyboard.enable(); if (map.tap) map.tap.enable();
+            document.querySelectorAll('.drawing-tool-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('map').classList.remove('drawing-mode');
+            document.getElementById('map').classList.remove('eraser-mode');
+            tempDrawingFeedbackLayer.clearLayers();
+            tempDrawingLayer = null;
+            freehandLine = null;
+            map.off('mousedown'); map.off('mousemove'); map.off('mouseup'); map.off('dblclick');
+            const mapContainer = map.getContainer();
+            mapContainer.removeEventListener('touchstart', startFreehandDrawingTouch);
+            mapContainer.removeEventListener('touchmove', continueFreehandDrawingTouch);
+            mapContainer.removeEventListener('touchend', finishFreehandDrawingTouch);
+            mapContainer.removeEventListener('touchstart', startRectangleDrawingTouch);
+            mapContainer.removeEventListener('touchmove', startRectangleDrawingTouch.updateRect);
+            mapContainer.removeEventListener('touchend', startRectangleDrawingTouch.finishRect);
+            mapContainer.removeEventListener('touchstart', startCircleDrawingTouch);
+            mapContainer.removeEventListener('touchmove', startCircleDrawingTouch.updateCircle);
+            mapContainer.removeEventListener('touchend', startCircleDrawingTouch.finishCircle);
+        }
+        
+        function getSelectedColor() {
+            return ROUTE_COLORS[document.querySelector('input[name="route-color"]:checked')?.value] || '#3b82f6';
+        }
+        
+        async function saveDrawing(type, data) {
+            const selectedColor = document.querySelector('input[name="route-color"]:checked')?.value;
+            if (!selectedColor) { showToast('אנא בחר צבע', 'error'); return; }
+            try {
+                const response = await fetch(`${API_BASE_URL}/add_drawing`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, data, color: selectedColor, password: adminPassword })
+                });
+                if (response.status === 403) { showToast('סיסמה שגויה.', 'error'); return; }
+                if (!response.ok) throw new Error('Network response');
+                showToast('הציור נשמר!', 'success');
+                fetchAndDisplayData();
+            } catch (error) { showToast('שגיאה בשמירת הציור.', 'error'); }
+        }
+
+        async function enterAdminMode(event) { 
+            event?.preventDefault(); 
+            const passwordAttempt = prompt('אנא הזן את סיסמת המנהל:'); 
+            if (!passwordAttempt) return; 
+            try { 
+                const response = await fetch(`${API_BASE_URL}/verify_password`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ password: passwordAttempt }) 
+                }); 
+                if (response.ok) { 
+                    adminPassword = passwordAttempt; 
+                    activateAdminUI(); 
+                    showToast('נכנסת למצב מנהל!', 'success'); 
+                } else { 
+                    showToast('סיסמה שגויה.', 'error'); 
+                } 
+            } catch (error) { 
+                showToast('שגיאת תקשורת.', 'error'); 
+            } 
+        }
+        
+        async function fetchUserCount() {
+            if (!adminPassword) return;
+            try {
+                const response = await fetch(`${API_BASE_URL}/get_user_count?password=${adminPassword}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('user-count').textContent = data.count;
+                }
+            } catch (error) {
+                console.error("Error fetching user count:", error);
+                document.getElementById('user-count').textContent = 'שגיאה';
+            }
+        }
+
+        function activateAdminUI() { 
+            document.getElementById('instruction-text').innerHTML = 'אתה במצב מנהל. <a href="#" onclick="logoutAdmin(event)" class="text-red-600 hover:underline">התנתק</a>.'; 
+            document.getElementById('admin-color-panel').classList.remove('hidden'); 
+            document.getElementById('drawing-tools-panel').classList.remove('hidden');
+            document.getElementById('map').classList.add('admin-mode');
+            document.getElementById('user-count-panel').classList.remove('hidden');
+            fetchUserCount();
+            userCountInterval = setInterval(fetchUserCount, 4000);
+            fetchAndDisplayData(); 
+        }
+        
+        function deactivateAdminUI() { 
+            adminPassword = null; 
+            document.getElementById('instruction-text').innerHTML = 'מצב צפייה. <a href="#" onclick="enterAdminMode(event)" class="text-blue-600 hover:underline">היכנס כמנהל</a>.'; 
+            document.getElementById('admin-color-panel').classList.add('hidden'); 
+            document.getElementById('drawing-tools-panel').classList.add('hidden');
+            document.getElementById('map').classList.remove('admin-mode'); 
+            document.getElementById('user-count-panel').classList.add('hidden');
+            if (userCountInterval) { clearInterval(userCountInterval); userCountInterval = null; }
+            cancelDrawing();
+            fetchAndDisplayData(); 
+        }
+        
+        function logoutAdmin(event) { 
+            event.preventDefault(); 
+            deactivateAdminUI(); 
+            showToast('התנתקת.', 'success'); 
+        }
+        
+        async function fetchAndDisplayData() { 
+            try { 
+                const response = await fetch(`${API_BASE_URL}/get_data?sessionId=${sessionId}`); 
+                if (!response.ok) return; 
+                const data = await response.json(); 
+                updateLegend(data.legends); 
+                drawAllRoutes(data.routes);
+                drawAllDrawings(data.drawings || {});
+            } catch (error) { 
+                console.error('Error fetching data:', error); 
+            } 
+        }
+        
+        function drawAllDrawings(drawings) {
+            drawingsLayer.clearLayers();
+            drawingLayersMap.clear();
+            for (const color in drawings) {
+                const items = drawings[color];
+                const hexColor = ROUTE_COLORS[color];
+                items.forEach(item => {
+                    let layer;
+                    if (item.type === 'freehand') layer = L.polyline(item.data, { color: hexColor, weight: 3 });
+                    else if (item.type === 'polygon') layer = L.polygon(item.data, { color: hexColor, weight: 2, fillOpacity: 0.2 });
+                    else if (item.type === 'rectangle') layer = L.rectangle(item.data, { color: hexColor, weight: 2, fillOpacity: 0.2 });
+                    else if (item.type === 'circle') layer = L.circle(item.data.center, { radius: item.data.radius, color: hexColor, weight: 2, fillOpacity: 0.2 });
+                    
+                    if (layer) {
+                        drawingLayersMap.set(item.id, { layer: layer, id: item.id });
+                        layer.on('click', function(e) {
+                            if (eraserMode && adminPassword) {
+                                L.DomEvent.stopPropagation(e);
+                                if (confirm('האם למחוק את הציור?')) deleteDrawing(item.id);
+                            }
+                        });
+                        layer.on('mouseover', function() { if (eraserMode) this.setStyle({ weight: 4, color: '#f59e0b' }); });
+                        layer.on('mouseout', function() { if (eraserMode) this.setStyle({ weight: item.type === 'freehand' ? 3 : 2, color: hexColor }); });
+                        drawingsLayer.addLayer(layer);
+                    }
+                });
+            }
+        }
+        
+        async function deleteDrawing(drawingId) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/delete_drawing`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: drawingId, password: adminPassword })
+                });
+                if (response.status === 403) { showToast('סיסמה שגויה.', 'error'); return; }
+                if (!response.ok) throw new Error('Network response');
+                showToast('הציור נמחק!', 'success');
+                fetchAndDisplayData();
+            } catch (error) { showToast('שגיאה במחיקת הציור.', 'error'); }
+        }
+        
+        function drawAllRoutes(routes) {
+            drawnItems.clearLayers();
+            for (const color in routes) {
+                const pins = routes[color]; if (pins.length === 0) continue;
+                const routeCoordinates = pins.map(p => [p.lat, p.lng]);
+                const hexColor = ROUTE_COLORS[color];
+                pins.forEach((pin, index) => {
+                    const centerLatLng = L.latLng(pin.lat, pin.lng);
+                    const marker = L.marker(centerLatLng, { icon: createNumberedIcon(hexColor, index + 1) });
+                    const date = new Date(pin.timestamp); const formattedDate = date.toLocaleString('he-IL', { timeStyle: 'short', dateStyle: 'short' });
+                    const lat = centerLatLng.lat.toFixed(5); const lng = centerLatLng.lng.toFixed(5);
+                    
+                    // *** התיקון הסופי והמוחלט לשגיאת ההקלדה ***
+                    const navLink = `https://www.google.com/maps?q=${centerLatLng.lat},${centerLatLng.lng}`;
+                    
+                    let popupContent = `<b>#${index + 1}: ${pin.text || '<i>ללא תיאור</i>'}</b><br><small>${formattedDate}</small>`;
+                    if (pin.radius > 0) popupContent += `<br><small>רדיוס: <span id="radius-text-${pin.id}">${Math.round(pin.radius)}</span> מטר</small>`;
+                    popupContent += `<div class="popup-coords mt-2 text-xs">נ.צ: <a href="${navLink}" target="_blank" rel="noopener noreferrer">${lat}, ${lng}</a></div>`;
+                    marker.bindPopup(popupContent);
+                    marker.on('contextmenu', () => deletePin(pin.id));
+                    drawnItems.addLayer(marker);
+
+                    if (pin.radius > 0) {
+                        const circle = L.circle(centerLatLng, { radius: pin.radius, color: hexColor, fillColor: hexColor, fillOpacity: 0.1, weight: 1 });
+                        const radiusLabel = L.tooltip({ permanent: true, direction: 'center', className: 'radius-tooltip' }).setContent(`רדיוס: ${Math.round(pin.radius)} מ'`);
+                        circle.bindTooltip(radiusLabel);
+                        drawnItems.addLayer(circle);
+                        if (adminPassword) addResizeHandle(pin, circle, radiusLabel, color);
+                    }
+                });
+                if (routeCoordinates.length > 1) {
+                    const polyline = L.polyline(routeCoordinates, { color: hexColor, weight: 3 });
+                    const arrows = L.polylineDecorator(polyline, { patterns: [{ offset: '50%', repeat: 100, symbol: L.Symbol.arrowHead({ pixelSize: 12, pathOptions: { color: hexColor, fillOpacity: 1, weight: 0 } }) }] });
+                    drawnItems.addLayer(polyline); drawnItems.addLayer(arrows);
+                }
+            }
+        }
+        
+        function addResizeHandle(pin, circle, radiusLabel, color) {
+            const center = circle.getLatLng();
+            const getHandlePosition = () => L.latLng(center.lat, circle.getBounds().getEast());
+            const resizeHandle = L.marker(getHandlePosition(), { draggable: true, icon: L.divIcon({ className: 'resize-handle-icon', html: `<div style="background-color: ${ROUTE_COLORS[color]};"></div>` }) }).addTo(drawnItems);
+            L.DomEvent.on(resizeHandle.getElement(), 'click', L.DomEvent.stopPropagation).on(resizeHandle.getElement(), 'mousedown', L.DomEvent.stopPropagation);
+            resizeHandle.on('drag', function(e) { const newRadius = center.distanceTo(e.target.getLatLng()); circle.setRadius(newRadius); radiusLabel.setContent(`רדיוס: ${Math.round(newRadius)} מ'`); const popupRadiusText = document.getElementById(`radius-text-${pin.id}`); if (popupRadiusText) popupRadiusText.textContent = Math.round(newRadius); });
+            resizeHandle.on('dragend', function(e) { const finalRadius = center.distanceTo(e.target.getLatLng()); updateRadiusOnServer(pin.id, finalRadius); });
+        }
+
+        async function searchLocation() {
+            const query = document.getElementById('search-input').value;
+            if (!query) return;
+            showToast('מחפש...', 'info');
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                if (data && data.length > 0) { const { lat, lon } = data[0]; map.flyTo([lat, lon], 13); } 
+                else { showToast('המיקום לא נמצא.', 'error'); }
+            } catch (error) { showToast('שגיאת רשת בחיפוש.', 'error'); }
+        }
+        
+        function updateLegend(legends) { 
+            const container = document.getElementById('legend-items-container'); 
+            container.innerHTML = ''; 
+            for (const color in legends) { 
+                const item = document.createElement('div'); 
+                item.className = 'legend-item'; 
+                item.innerHTML = `<div class="legend-color-box" style="background-color: ${ROUTE_COLORS[color]}"></div> <span class="legend-text" data-color="${color}">${legends[color]}</span>`; 
+                container.appendChild(item); 
+                const span = item.querySelector('.legend-text'); 
+                if (adminPassword) { 
+                    span.classList.add('editable'); 
+                    span.onclick = () => { 
+                        const newText = prompt('שנה שם מסלול:', span.textContent); 
+                        if (newText && newText.trim() !== '') updateLegendTextOnServer(color, newText); 
+                    }; 
+                } 
+            } 
+        }
+        
+        function buildAdminPanel() { 
+            const panel = document.getElementById('admin-panel-content'); 
+            panel.innerHTML = ''; 
+            Object.keys(ROUTE_COLORS).forEach((color, index) => { 
+                const div = document.createElement('div'); 
+                div.className = 'color-radio'; 
+                div.innerHTML = `<input type="radio" id="color-${color}" name="route-color" value="${color}" ${index === 0 ? 'checked' : ''}> <label for="color-${color}" style="background-color: ${ROUTE_COLORS[color]};" title="${color}"></label>`; 
+                panel.appendChild(div); 
+            }); 
+        }
+        
+        function createNumberedIcon(color, number) { 
+            const iconHtml = `<div class="numbered-icon-container"><svg class="numbered-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="${color}" stroke="white" stroke-width="1"/></svg><div class="numbered-icon-text">${number}</div></div>`; 
+            return L.divIcon({ html: iconHtml, className: 'custom-div-icon', iconSize: [32, 32], iconAnchor: [16, 32], popupAnchor: [0, -32] }); 
+        }
+        
+        async function addPinToServer(location, text, color, radius) { 
+            try { 
+                const response = await fetch(`${API_BASE_URL}/add_pin`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ lat: location.lat, lng: location.lng, text, color, radius, password: adminPassword }), 
+                }); 
+                if (response.status === 403) { showToast('סיסמה שגויה.', 'error'); return; } 
+                if (!response.ok) throw new Error('Network response'); 
+                showToast('הנעץ נוסף!', 'success'); 
+                fetchAndDisplayData(); 
+            } catch (error) { showToast('שגיאה בהוספת הנעץ.', 'error'); } 
+        }
+        
+        async function deletePin(pinId) { 
+            if (!adminPassword || !confirm('האם למחוק את האלמנט?')) return; 
+            try { 
+                const response = await fetch(`${API_BASE_URL}/delete_pin`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ id: pinId, password: adminPassword }) 
+                }); 
+                if (response.status === 403) { showToast('סיסמה שגויה.', 'error'); return; } 
+                if (!response.ok) throw new Error('Network response'); 
+                showToast('האלמנט נמחק!', 'success'); 
+                fetchAndDisplayData(); 
+            } catch (error) { showToast('שגיאה במחיקת האלמנט.', 'error'); } 
+        }
+        
+        async function updateLegendTextOnServer(color, text) { 
+            try { 
+                const response = await fetch(`${API_BASE_URL}/update_legend`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ color, text, password: adminPassword }), 
+                }); 
+                if (!response.ok) throw new Error('Failed to update legend'); 
+                showToast('שם המסלול עודכן!', 'success'); 
+                fetchAndDisplayData(); 
+            } catch (error) { showToast('שגיאה בעדכון השם.', 'error'); } 
+        }
+        
+        async function updateRadiusOnServer(pinId, radius) { 
+            try { 
+                const response = await fetch(`${API_BASE_URL}/update_radius`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ id: pinId, radius: radius, password: adminPassword }) 
+                }); 
+                if (!response.ok) throw new Error('Failed to update radius'); 
+                showToast('הרדיוס עודכן!', 'success'); 
+            } catch (error) { 
+                showToast('שגיאה בעדכון הרדיוס.', 'error'); 
+                fetchAndDisplayData(); 
+            } 
+        }
+        
+        function showToast(message, type = 'success') { 
+            const toast = document.getElementById('toast'); 
+            toast.textContent = message; 
+            toast.className = `fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg z-[1001] ${type === 'success' ? 'bg-green-500' : type === 'info' ? 'bg-blue-500' : 'bg-red-500'}`; 
+            toast.classList.remove('hidden'); 
+            setTimeout(() => toast.classList.add('hidden'), 3000); 
+        }
+    </script>
+</body>
+</html>
