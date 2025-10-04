@@ -1,3 +1,4 @@
+import os
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import uuid
@@ -137,4 +138,5 @@ def get_data():
         "routes": sorted_pins, 
         "legends": route_legends,
         "drawings": sorted_drawings
+
     })
